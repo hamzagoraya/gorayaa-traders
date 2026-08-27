@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react"
+
 import {
   seedShopExpenses,
   staffMembers,
@@ -20,125 +21,294 @@ const STORAGE_STAFF = "goraya-staff-money-v1"
 
 export interface StaffMoneyBalance {
   staffId: string
-  /** PKR given to staff as advance from shop (typically recovered from salary) */
   advanceFromShop: number
-  /** PKR the shop is holding for this staff member (owed to them) */
   heldForStaff: number
 }
 
 type StaffMoneyMap = Record<string, StaffMoneyBalance>
 
+function safeNumber(value: unknown): number {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : 0
+}
+
 function initialStaffMoney(): StaffMoneyMap {
   return Object.fromEntries(
-    staffMembers.map((s) => [
-      s.id,
-      { staffId: s.id, advanceFromShop: 0, heldForStaff: 0 },
+    staffMembers.map((staff) => [
+      staff.id,
+      {
+        staffId: staff.id,
+        advanceFromShop: 0,
+        heldForStaff: 0,
+      },
     ])
   )
 }
 
 function readExpenses(): ShopExpense[] | null {
-  if (typeof window === "undefined") return null
+  if (typeof window === "undefined") {
+    return null
+  }
+
   try {
     const raw = localStorage.getItem(STORAGE_EXP)
-    if (raw === null) return null
-    const p = JSON.parse(raw) as ShopExpense[]
-    return Array.isArray(p) ? p : null
+
+    if (!raw) {
+      return null
+    }
+
+    const parsed: unknown = JSON.parse(raw)
+
+    if (!Array.isArray(parsed)) {
+      return null
+    }
+
+    return parsed.map((item: any, index) => ({
+      id:
+        item?.id != null
+          ? String(item.id)
+          : `exp-${Date.now()}-${index}`,
+
+      date: String(item?.date ?? ""),
+
+      category: String(item?.category ?? "General"),
+
+      description: String(item?.description ?? ""),
+
+      amount: safeNumber(item?.amount),
+    }))
   } catch {
     return null
   }
 }
 
 function readStaffMoney(): StaffMoneyMap | null {
-  if (typeof window === "undefined") return null
+  if (typeof window === "undefined") {
+    return null
+  }
+
   try {
     const raw = localStorage.getItem(STORAGE_STAFF)
-    if (!raw) return null
-    const p = JSON.parse(raw) as StaffMoneyMap
-    if (!p || typeof p !== "object") return null
-    return p
+
+    if (!raw) {
+      return null
+    }
+
+    const parsed: unknown = JSON.parse(raw)
+
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed)
+    ) {
+      return null
+    }
+
+    return parsed as StaffMoneyMap
   } catch {
     return null
   }
 }
 
-function mergeStaffMoney(stored: StaffMoneyMap | null): StaffMoneyMap {
+function mergeStaffMoney(
+  stored: StaffMoneyMap | null
+): StaffMoneyMap {
   const base = initialStaffMoney()
-  if (!stored) return base
-  for (const id of Object.keys(base)) {
-    if (stored[id]) {
-      base[id] = {
-        staffId: id,
-        advanceFromShop: Math.max(0, Number(stored[id].advanceFromShop) || 0),
-        heldForStaff: Math.max(0, Number(stored[id].heldForStaff) || 0),
-      }
+
+  if (!stored) {
+    return base
+  }
+
+  for (const staffId of Object.keys(base)) {
+    const storedStaff = stored[staffId]
+
+    if (!storedStaff) {
+      continue
+    }
+
+    base[staffId] = {
+      staffId,
+
+      advanceFromShop: Math.max(
+        0,
+        safeNumber(storedStaff.advanceFromShop)
+      ),
+
+      heldForStaff: Math.max(
+        0,
+        safeNumber(storedStaff.heldForStaff)
+      ),
     }
   }
+
   return base
 }
 
 interface ShopFinanceContextType {
   expenses: ShopExpense[]
+
   staffMoney: StaffMoneyMap
-  addExpense: (e: Omit<ShopExpense, "id">) => void
-  setStaffBalance: (staffId: string, patch: Partial<Pick<StaffMoneyBalance, "advanceFromShop" | "heldForStaff">>) => void
+
+  addExpense: (
+    expense: Omit<ShopExpense, "id">
+  ) => void
+
+  setStaffBalance: (
+    staffId: string,
+    patch: Partial<
+      Pick<
+        StaffMoneyBalance,
+        "advanceFromShop" | "heldForStaff"
+      >
+    >
+  ) => void
+
   expenseTotal: number
+
   hydrated: boolean
 }
 
-const ShopFinanceContext = createContext<ShopFinanceContextType | undefined>(undefined)
+const ShopFinanceContext =
+  createContext<ShopFinanceContextType | undefined>(
+    undefined
+  )
 
-export function ShopFinanceProvider({ children }: { children: ReactNode }) {
-  const [expenses, setExpenses] = useState<ShopExpense[]>(seedShopExpenses)
-  const [staffMoney, setStaffMoney] = useState<StaffMoneyMap>(() => initialStaffMoney())
-  const [hydrated, setHydrated] = useState(false)
+export function ShopFinanceProvider({
+  children,
+}: {
+  children: ReactNode
+}) {
+  const [expenses, setExpenses] =
+    useState<ShopExpense[]>(seedShopExpenses)
+
+  const [staffMoney, setStaffMoney] =
+    useState<StaffMoneyMap>(
+      initialStaffMoney
+    )
+
+  const [hydrated, setHydrated] =
+    useState(false)
 
   useEffect(() => {
-    const ex = readExpenses()
-    if (ex !== null) setExpenses(ex)
-    const sm = readStaffMoney()
-    setStaffMoney(mergeStaffMoney(sm))
+    const storedExpenses = readExpenses()
+
+    if (storedExpenses !== null) {
+      setExpenses(storedExpenses)
+    }
+
+    const storedStaffMoney =
+      readStaffMoney()
+
+    setStaffMoney(
+      mergeStaffMoney(storedStaffMoney)
+    )
+
     setHydrated(true)
   }, [])
 
   useEffect(() => {
-    if (!hydrated || typeof window === "undefined") return
+    if (
+      !hydrated ||
+      typeof window === "undefined"
+    ) {
+      return
+    }
+
     try {
-      localStorage.setItem(STORAGE_EXP, JSON.stringify(expenses))
+      localStorage.setItem(
+        STORAGE_EXP,
+        JSON.stringify(expenses)
+      )
     } catch {
-      /* ignore */
+      // Ignore localStorage errors.
     }
   }, [expenses, hydrated])
 
   useEffect(() => {
-    if (!hydrated || typeof window === "undefined") return
+    if (
+      !hydrated ||
+      typeof window === "undefined"
+    ) {
+      return
+    }
+
     try {
-      localStorage.setItem(STORAGE_STAFF, JSON.stringify(staffMoney))
+      localStorage.setItem(
+        STORAGE_STAFF,
+        JSON.stringify(staffMoney)
+      )
     } catch {
-      /* ignore */
+      // Ignore localStorage errors.
     }
   }, [staffMoney, hydrated])
 
-  const addExpense = useCallback((row: Omit<ShopExpense, "id">) => {
-    const id = `exp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
-    setExpenses((prev) => [{ ...row, id }, ...prev])
-  }, [])
+  const addExpense = useCallback(
+    (expense: Omit<ShopExpense, "id">) => {
+      const id = `exp-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 7)}`
+
+      const cleanExpense: ShopExpense = {
+        ...expense,
+        id,
+        amount: safeNumber(expense.amount),
+      }
+
+      setExpenses((previous) => [
+        cleanExpense,
+        ...previous,
+      ])
+    },
+    []
+  )
 
   const setStaffBalance = useCallback(
-    (staffId: string, patch: Partial<Pick<StaffMoneyBalance, "advanceFromShop" | "heldForStaff">>) => {
-      setStaffMoney((prev) => {
-        const cur = prev[staffId] ?? { staffId, advanceFromShop: 0, heldForStaff: 0 }
+    (
+      staffId: string,
+      patch: Partial<
+        Pick<
+          StaffMoneyBalance,
+          "advanceFromShop" | "heldForStaff"
+        >
+      >
+    ) => {
+      setStaffMoney((previous) => {
+        const current =
+          previous[staffId] ?? {
+            staffId,
+            advanceFromShop: 0,
+            heldForStaff: 0,
+          }
+
         return {
-          ...prev,
+          ...previous,
+
           [staffId]: {
-            ...cur,
-            ...patch,
+            ...current,
+
             advanceFromShop:
               patch.advanceFromShop !== undefined
-                ? Math.max(0, patch.advanceFromShop)
-                : cur.advanceFromShop,
+                ? Math.max(
+                    0,
+                    safeNumber(
+                      patch.advanceFromShop
+                    )
+                  )
+                : safeNumber(
+                    current.advanceFromShop
+                  ),
+
             heldForStaff:
-              patch.heldForStaff !== undefined ? Math.max(0, patch.heldForStaff) : cur.heldForStaff,
+              patch.heldForStaff !== undefined
+                ? Math.max(
+                    0,
+                    safeNumber(
+                      patch.heldForStaff
+                    )
+                  )
+                : safeNumber(
+                    current.heldForStaff
+                  ),
           },
         }
       })
@@ -146,11 +316,28 @@ export function ShopFinanceProvider({ children }: { children: ReactNode }) {
     []
   )
 
-  const expenseTotal = useMemo(() => expenses.reduce((s, e) => s + e.amount, 0), [expenses])
+  const expenseTotal = useMemo(() => {
+    return expenses.reduce(
+      (total, expense) => {
+        return (
+          total +
+          safeNumber(expense?.amount)
+        )
+      },
+      0
+    )
+  }, [expenses])
 
   return (
     <ShopFinanceContext.Provider
-      value={{ expenses, staffMoney, addExpense, setStaffBalance, expenseTotal, hydrated }}
+      value={{
+        expenses,
+        staffMoney,
+        addExpense,
+        setStaffBalance,
+        expenseTotal,
+        hydrated,
+      }}
     >
       {children}
     </ShopFinanceContext.Provider>
@@ -158,7 +345,15 @@ export function ShopFinanceProvider({ children }: { children: ReactNode }) {
 }
 
 export function useShopFinance() {
-  const ctx = useContext(ShopFinanceContext)
-  if (!ctx) throw new Error("useShopFinance must be used within ShopFinanceProvider")
-  return ctx
+  const context =
+    useContext(ShopFinanceContext)
+
+  if (!context) {
+    throw new Error(
+      "useShopFinance must be used within ShopFinanceProvider"
+    )
+  }
+
+  return context
 }
+
